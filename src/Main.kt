@@ -71,12 +71,29 @@ sudo systemctl restart ollama
         UIManager.put("OptionPane.messageFont", Font("Dialog", Font.PLAIN, 12))
         UIManager.put("OptionPane.buttonFont", Font("Dialog", Font.PLAIN, 12))
 
-        SERVER_URL = System.getenv("OLLAMA_SERVER_URL")?: "http://127.0.0.1:11434/api/chat"
-        MODEL_NAME = System.getenv("OLLAMA_SERVER_MODEL")?: "hf.co/nurdich/Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-MTP-GGUF:IQ2_M"
-        PROMPT = System.getenv("OLLAMA_SERVER_PROMPT")?: "provide a very detailed description of the image in one line"
+        SERVER_URL = /*System.getenv("OLLAMA_SERVER_URL")?:*/ "http://10.8.0.6:11434/api/chat" // "http://192.168.11.100:8080/v1/chat/completions" //
+        MODEL_NAME = /*System.getenv("OLLAMA_SERVER_MODEL")?:*/ "hf.co/OBLITERATUS/Qwen3.8-27B-OBLITERATED:Q2_K"
+        PROMPT = System.getenv("OLLAMA_SERVER_PROMPT")?:  """
+make a very detailed description for stable diffusion anima of the image in one line, 
+but remove hairstyle and hair color and eye color and breast size of woman character specifications 
+from the description in English natural language style, not danbooru tag style."""
+
+        val serverPresets = arrayOf(
+            "http://10.8.0.6:11434/api/chat",
+            "http://10.8.0.10:11434/api/chat",
+            "http://192.168.11.100:11434/api/chat",
+            "http://192.168.11.100:8888/v1/chat/completions"
+        )
+        g!!.serverComboBox.isEditable = true
+        serverPresets.forEach { preset -> g!!.serverComboBox.addItem(preset) }
+        g!!.serverComboBox.selectedItem = SERVER_URL
+
+        g!!.apiFormatComboBox.addItem("Ollama (/api/chat)")
+        g!!.apiFormatComboBox.addItem("OpenAI互換 (/v1/chat/completions)")
+        g!!.apiFormatComboBox.selectedItem = "Ollama (/api/chat)"
+
         g!!.modelTextField.text = MODEL_NAME
         g!!.promptTextField.text = PROMPT
-        g!!.serverTextField.text = SERVER_URL
 
         setSize(900, 600)
         isResizable = false
@@ -94,14 +111,21 @@ sudo systemctl restart ollama
         g!!.selectDirectoryButton.isEnabled = false
 
         MODEL_NAME = g!!.modelTextField.text
-        SERVER_URL = g!!.serverTextField.text
+        SERVER_URL = g!!.serverComboBox.editor.item?.toString()?.trim().orEmpty()
         PROMPT = g!!.promptTextField.text
+
+        val apiFormat = when (g!!.apiFormatComboBox.selectedItem?.toString()) {
+            "OpenAI互換 (/v1/chat/completions)" -> ApiFormat.OPENAI_COMPATIBLE
+            else -> ApiFormat.OLLAMA
+        }
 
         val fc = JFileChooser()
         fc.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY)      // select directory only
         val returnVal = fc.showOpenDialog(thisApp)
-        if (returnVal != JFileChooser.APPROVE_OPTION)
+        if (returnVal != JFileChooser.APPROVE_OPTION) {
+            g!!.selectDirectoryButton.isEnabled = true
             return
+        }
         val dir = fc.selectedFile
 
         val worker =
@@ -112,6 +136,7 @@ sudo systemctl restart ollama
 
                     // HTTPクライアント
                     val client = HttpClient.newBuilder()
+                        .connectTimeout(java.time.Duration.ofSeconds(30))
                         .build()
 
                     // 対象画像を取得
@@ -141,7 +166,8 @@ sudo systemctl restart ollama
                                 imagePath = imagePath,
                                 modelName = MODEL_NAME,
                                 prompt = PROMPT,
-                                serverURL = SERVER_URL
+                                serverURL = SERVER_URL,
+                                apiFormat = apiFormat
                             )
 
                             // 結果を保存
@@ -183,13 +209,37 @@ sudo systemctl restart ollama
                     }
                 }
 
-                override fun done()
-                {
 
-                    g!!.selectDirectoryButton.isEnabled = true
+                override fun done() {
+                    try {
+                        // doInBackground() の例外をここで検出する
+                        get()
+                        g!!.textArea1.append("\n\n**全画像の処理が正常終了しました**")
 
-                    g!!.textArea1.append("\n\n**完了**")
+                    } catch (e: java.util.concurrent.ExecutionException) {
+                        val cause = e.cause ?: e
+
+                        val message =
+                            "\n\n**異常終了しました**\n" +
+                                    "原因: ${cause.javaClass.name}\n" +
+                                    "詳細: ${cause.message}"
+
+                        g!!.textArea1.append(message)
+                        System.err.println(message)
+                        cause.printStackTrace()
+
+                    } catch (e: java.util.concurrent.CancellationException) {
+                        g!!.textArea1.append("\n\n**処理がキャンセルされました**")
+
+                    } catch (e: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        g!!.textArea1.append("\n\n**終了確認が中断されました**")
+
+                    } finally {
+                        g!!.selectDirectoryButton.isEnabled = true
+                    }
                 }
+
             }
 
         worker.execute()
@@ -239,103 +289,164 @@ sudo systemctl restart ollama
 // 画像解析
 // ==============================
 
+enum class ApiFormat {
+    OLLAMA,
+    OPENAI_COMPATIBLE
+}
+
+// ==============================
+// 画像解析
+// ==============================
+
 fun analyzeImage(
     client: HttpClient,
     imagePath: Path,
     modelName: String,
     prompt: String,
     serverURL: String,
+    apiFormat: ApiFormat
 ): String {
 
-    // 画像を読み込む
     val imageBytes = Files.readAllBytes(imagePath)
-
-    val imageBase64 = Base64.getEncoder()
-        .encodeToString(imageBytes)
-
-    // MIMEタイプを判定
+    val imageBase64 = Base64.getEncoder().encodeToString(imageBytes)
     val mimeType = getMimeType(imagePath)
 
-    /*
-     * OpenAI Vision API互換形式
-     *
-     * messages:
-     * [
-     *   {
-     *     role: "user",
-     *     content: [
-     *       {
-     *         type: "text",
-     *         text: "..."
-     *       },
-     *       {
-     *         type: "image_url",
-     *         image_url: {
-     *           url: "data:image/jpeg;base64,..."
-     *         }
-     *       }
-     *     ]
-     *   }
-     * ]
-     */
-
-    val escapedPrompt = prompt
-        .replace("\\", "\\\\")
-        .replace("\"", "\\\"")
-        .replace("\n", "\\n")
-    val json = """
-        {
-          "model": "$modelName",
-          "messages": [
+    val json = when (apiFormat) {
+        ApiFormat.OLLAMA -> """
             {
-              "role": "user",
-              "content": "$escapedPrompt",
-              "images": [
-                "$imageBase64"
-              ]
+              "model": ${jsonString(modelName)},
+              "messages": [
+                {
+                  "role": "user",
+                  "content": ${jsonString(prompt)},
+                  "images": [${jsonString(imageBase64)}]
+                }
+              ],
+              "stream": false
             }
-          ],
-          "stream": false
-        }
-    """.trimIndent()
+        """.trimIndent()
 
-    // HTTP POST
+        ApiFormat.OPENAI_COMPATIBLE -> {
+            val dataUrl = "data:$mimeType;base64,$imageBase64"
+            """
+            {
+              "model": ${jsonString(modelName)},
+              "messages": [
+                {
+                  "role": "user",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": ${jsonString(prompt)}
+                    },
+                    {
+                      "type": "image_url",
+                      "image_url": {
+                        "url": ${jsonString(dataUrl)}
+                      }
+                    }
+                  ]
+                }
+              ],
+              "stream": false
+            }
+            """.trimIndent()
+        }
+    }
+
+    System.err.println("API形式: $apiFormat")
+    System.err.println("送信先: $serverURL")
+    System.err.println("送信画像: $imagePath")
+    System.err.println("画像サイズ: ${imageBytes.size} bytes / MIME: $mimeType")
+
     val request = HttpRequest.newBuilder()
         .uri(URI.create(serverURL))
         .header("Content-Type", "application/json")
+        .timeout(java.time.Duration.ofMinutes(10))
         .POST(HttpRequest.BodyPublishers.ofString(json))
         .build()
 
+    val response = client.send(request, HttpResponse.BodyHandlers.ofString())
 
-    val response = client.send(
-        request,
-        HttpResponse.BodyHandlers.ofString()
-    )
-
-    if (response.statusCode() != 200) {
-        throw RuntimeException(
-            "Ollama API error: ${response.statusCode()}\n${response.body()}"
-        )
+    if (response.statusCode() !in 200..299) {
+        throw RuntimeException("APIエラー (${response.statusCode()})\n${response.body()}")
     }
 
-    // 簡単なJSON解析
     val body = response.body()
-    val regex = Regex(
-        """"content"\s*:\s*"((?:\\.|[^"\\])*)""""
-    )
+    return when (apiFormat) {
+        ApiFormat.OLLAMA -> {
+            val messageStart = body.indexOf("\"message\"")
+            if (messageStart < 0) {
+                throw RuntimeException("Ollamaレスポンスに message がありません: $body")
+            }
+            extractJsonStringValue(body, "content", messageStart)
+                ?: throw RuntimeException("Ollamaレスポンスから message.content を取得できません: $body")
+        }
 
-    val match = regex.find(body)
-        ?: throw RuntimeException("解析結果を取得できませんでした: $body")
-
-    return match.groupValues[1]
-        .replace("\\n", "\n")
-        .replace("\\\"", "\"")
-        .replace("\\\\", "\\")
+        ApiFormat.OPENAI_COMPATIBLE -> {
+            val choicesStart = body.indexOf("\"choices\"")
+            if (choicesStart < 0) {
+                throw RuntimeException("OpenAI互換レスポンスに choices がありません: $body")
+            }
+            val messageStart = body.indexOf("\"message\"", choicesStart)
+            if (messageStart < 0) {
+                throw RuntimeException("OpenAI互換レスポンスに message がありません: $body")
+            }
+            extractJsonStringValue(body, "content", messageStart)
+                ?: throw RuntimeException("OpenAI互換レスポンスから choices[0].message.content を取得できません: $body")
+        }
+    }
 }
 
+// 指定位置以降にある JSON 文字列プロパティを取得する
+fun extractJsonStringValue(json: String, key: String, fromIndex: Int = 0): String? {
+    val keyToken = "\"$key\""
+    val keyIndex = json.indexOf(keyToken, fromIndex)
+    if (keyIndex < 0) return null
 
+    var pos = json.indexOf(':', keyIndex + keyToken.length)
+    if (pos < 0) return null
+    pos++
 
-// =========================================
+    while (pos < json.length && json[pos].isWhitespace()) pos++
+    if (pos >= json.length || json[pos] != '"') return null
+    pos++
+
+    val result = StringBuilder()
+    var escaped = false
+    while (pos < json.length) {
+        val c = json[pos++]
+        if (escaped) {
+            when (c) {
+                '"' -> result.append('"')
+                '\\' -> result.append('\\')
+                '/' -> result.append('/')
+                'b' -> result.append('\b')
+                'f' -> result.append('\u000C')
+                'n' -> result.append('\n')
+                'r' -> result.append('\r')
+                't' -> result.append('\t')
+                'u' -> {
+                    if (pos + 4 <= json.length) {
+                        val code = json.substring(pos, pos + 4).toIntOrNull(16) ?: return null
+                        result.append(code.toChar())
+                        pos += 4
+                    } else return null
+                }
+                else -> result.append(c)
+            }
+            escaped = false
+        } else {
+            when (c) {
+                '\\' -> escaped = true
+                '"' -> return result.toString()
+                else -> result.append(c)
+            }
+        }
+    }
+    return null
+}
+
 // GUI更新用データ
 // =========================================
 
