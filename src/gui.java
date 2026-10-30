@@ -8,5 +8,5 @@ public class gui {
     public JComboBox<String> apiFormatComboBox;
     public JTextField modelTextField;
     public JTextField promptTextField;
-
+    public JPasswordField apiPasswordField;
 }

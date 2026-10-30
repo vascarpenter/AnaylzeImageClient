@@ -53,6 +53,9 @@ sudo systemctl restart ollama
 
     */
 
+    private val OLLAMA_LABEL  = "Ollama (/api/chat)"
+    private val OPENAI_LABEL  = "OpenAI互換 (/v1/chat/completions)"
+    private var syncing = false
 
     var SERVER_URL = ""
 
@@ -60,6 +63,33 @@ sudo systemctl restart ollama
 
     // 画像解析用プロンプト
     var PROMPT = ""
+    // APIキー（未入力ならヘッダー付与しない）
+    var API_KEY = ""
+
+    /** URL文字列からAPI形式ラベルを推定する */
+    private fun detectFormat(url: String): String {
+        val u = url.trim().lowercase()
+        return when {
+            u.contains("/v1/") || u.contains("8080") -> OPENAI_LABEL   // OpenAI互換
+            else -> OLLAMA_LABEL                                  // /api/chat は Ollama
+        }
+    }
+
+    /** URLのホスト部（scheme://host:port）を取り出す */
+    private fun hostPart(url: String): String {
+        val u = url.trim()
+        val scheme = u.indexOf("://")
+        if (scheme < 0) return u
+        val pathSlash = u.indexOf('/', scheme + 3)
+        return if (pathSlash < 0) u else u.substring(0, pathSlash)
+    }
+
+    /** API形式ラベルに対応するURL（ホストは現在の値を維持）を返す */
+    private fun urlForFormat(label: String): String {
+        val base = hostPart(g!!.serverComboBox.editor.item?.toString().orEmpty())
+        return if (label == OPENAI_LABEL) "$base/v1/chat/completions"
+        else                      "$base/api/chat"
+    }
 
     init
     {
@@ -77,6 +107,8 @@ sudo systemctl restart ollama
 make a very detailed description for stable diffusion anima of the image in one line, 
 but remove hairstyle and hair color and eye color and breast size of woman character specifications 
 from the description in English natural language style, not danbooru tag style."""
+        API_KEY = System.getenv("OPENAI_API_KEY") ?: "apikey"
+        g!!.apiPasswordField.text = API_KEY
 
         val serverPresets = arrayOf(
             "http://10.8.0.6:11434/api/chat",
@@ -88,9 +120,9 @@ from the description in English natural language style, not danbooru tag style."
         serverPresets.forEach { preset -> g!!.serverComboBox.addItem(preset) }
         g!!.serverComboBox.selectedItem = SERVER_URL
 
-        g!!.apiFormatComboBox.addItem("Ollama (/api/chat)")
-        g!!.apiFormatComboBox.addItem("OpenAI互換 (/v1/chat/completions)")
-        g!!.apiFormatComboBox.selectedItem = "Ollama (/api/chat)"
+        g!!.apiFormatComboBox.addItem(OLLAMA_LABEL)
+        g!!.apiFormatComboBox.addItem(OPENAI_LABEL)
+        g!!.apiFormatComboBox.selectedItem = OLLAMA_LABEL
 
         g!!.modelTextField.text = MODEL_NAME
         g!!.promptTextField.text = PROMPT
@@ -103,7 +135,23 @@ from the description in English natural language style, not danbooru tag style."
         g!!.selectDirectoryButton.addActionListener {
             startAnalysis()
         }
+        // URL を変えたら → API形式を自動選択
+        g!!.serverComboBox.addActionListener {
+            if (syncing) return@addActionListener
+            syncing = true
+            g!!.apiFormatComboBox.selectedItem =
+                detectFormat(g!!.serverComboBox.editor.item?.toString().orEmpty())
+            syncing = false
+        }
 
+        // API形式を変えたら → URLのパス部分を追随させる
+        g!!.apiFormatComboBox.addActionListener {
+            if (syncing) return@addActionListener
+            syncing = true
+            g!!.serverComboBox.editor.item =
+                urlForFormat(g!!.apiFormatComboBox.selectedItem?.toString().orEmpty())
+            syncing = false
+        }
     }
 
     private fun startAnalysis()
@@ -113,6 +161,7 @@ from the description in English natural language style, not danbooru tag style."
         MODEL_NAME = g!!.modelTextField.text
         SERVER_URL = g!!.serverComboBox.editor.item?.toString()?.trim().orEmpty()
         PROMPT = g!!.promptTextField.text
+        API_KEY = g!!.apiPasswordField.text.trim()
 
         val apiFormat = when (g!!.apiFormatComboBox.selectedItem?.toString()) {
             "OpenAI互換 (/v1/chat/completions)" -> ApiFormat.OPENAI_COMPATIBLE
@@ -167,7 +216,8 @@ from the description in English natural language style, not danbooru tag style."
                                 modelName = MODEL_NAME,
                                 prompt = PROMPT,
                                 serverURL = SERVER_URL,
-                                apiFormat = apiFormat
+                                apiFormat = apiFormat,
+                                apiKey = API_KEY
                             )
 
                             // 結果を保存
@@ -304,7 +354,8 @@ fun analyzeImage(
     modelName: String,
     prompt: String,
     serverURL: String,
-    apiFormat: ApiFormat
+    apiFormat: ApiFormat,
+    apiKey: String
 ): String {
 
     val imageBytes = Files.readAllBytes(imagePath)
@@ -359,10 +410,14 @@ fun analyzeImage(
     System.err.println("送信画像: $imagePath")
     System.err.println("画像サイズ: ${imageBytes.size} bytes / MIME: $mimeType")
 
-    val request = HttpRequest.newBuilder()
+    val builder = HttpRequest.newBuilder()
         .uri(URI.create(serverURL))
         .header("Content-Type", "application/json")
         .timeout(java.time.Duration.ofMinutes(10))
+    if (apiKey.isNotBlank()) {
+        builder.header("Authorization", "Bearer $apiKey")
+    }
+    val request = builder
         .POST(HttpRequest.BodyPublishers.ofString(json))
         .build()
 
