@@ -101,7 +101,7 @@ sudo systemctl restart ollama
         UIManager.put("OptionPane.messageFont", Font("Dialog", Font.PLAIN, 12))
         UIManager.put("OptionPane.buttonFont", Font("Dialog", Font.PLAIN, 12))
 
-        SERVER_URL = /*System.getenv("OLLAMA_SERVER_URL")?:*/ "http://10.8.0.6:11434/api/chat" // "http://192.168.11.100:8080/v1/chat/completions" //
+        SERVER_URL = /*System.getenv("OLLAMA_SERVER_URL")?:*/ "http://192.168.11.100:8888/v1/chat/completions" // "http://192.168.11.100:8080/v1/chat/completions" //
         MODEL_NAME = /*System.getenv("OLLAMA_SERVER_MODEL")?:*/ "hf.co/OBLITERATUS/Qwen3.8-27B-OBLITERATED:Q2_K"
         PROMPT = System.getenv("OLLAMA_SERVER_PROMPT")?:  """
 make a very detailed description for stable diffusion anima of the image in one line, 
@@ -122,7 +122,10 @@ from the description in English natural language style, not danbooru tag style."
 
         g!!.apiFormatComboBox.addItem(OLLAMA_LABEL)
         g!!.apiFormatComboBox.addItem(OPENAI_LABEL)
-        g!!.apiFormatComboBox.selectedItem = OLLAMA_LABEL
+        syncing = true
+        g!!.apiFormatComboBox.selectedItem =
+            detectFormat(g!!.serverComboBox.editor.item?.toString().orEmpty())
+        syncing = false
 
         g!!.modelTextField.text = MODEL_NAME
         g!!.promptTextField.text = PROMPT

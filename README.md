@@ -5,6 +5,7 @@
 - llmを使って画像の英語promptを得ます
 - 主にllmを使った画像の学習用txtの作成など（じゃあなんでabliteratedとか聞くな)
 - llmを使うのでWD14 taggerよりはるかに重い
+- でもQwen on Strataならまあまあ早くて、ollamaなんかやってられん
 
 ## 環境変数
 - 前もって設定しておく環境変数
@@ -23,6 +24,9 @@
   - llm に投げる promptそのもの
   - very detailed description の重みは自分で調整してね
 
+- `OPENAI_API_KEY="api_key_donot_see"`
+  - Open AI APIにアクセスするときの鍵　きちんとStrataに鍵かけてね
+
 ## 起動
 - `java -jar AnalyzeImageClient.jar`
   - dialogが現れ、GUIでも上記を設定できる
@@ -30,7 +34,7 @@
     同じディレクトリの画像.txtファイルで保存します
 
 ## Server と Client が違う場合
-- ServerはUbuntu ollamaで構築しました
+- ServerはUbuntu ollamaで構築しました（当初） StrataのOpenAI互換に切り替えた
 - ollama サーバとこのクライアントのIPが違う場合、サーバ側に下記の修正が必要
 ```
 sudo systemctl stop ollama.service
